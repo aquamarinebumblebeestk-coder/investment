@@ -7,7 +7,9 @@ from datetime import date, timedelta
 from typing import Any
 
 from .client import JQuantsClient, JQuantsError, PlanNotSupportedError
+from .financial import FinancialAnalysis, analyze_financials
 from .plans import Feature
+from .technical import TechnicalAnalysis, analyze_technicals
 
 
 def to_float(value: Any) -> float | None:
@@ -49,6 +51,13 @@ class AnnualResult:
     dividend_per_share: float | None
     payout_ratio: float | None
     roe: float | None
+    total_assets: float | None = None
+    equity: float | None = None
+    equity_ratio: float | None = None
+    cfo: float | None = None  # 営業CF
+    cfi: float | None = None  # 投資CF
+    cff: float | None = None  # 財務CF
+    cash: float | None = None  # 現金及び現金同等物
 
 
 @dataclass
@@ -61,6 +70,20 @@ class Forecast:
     net_profit: float | None
     eps: float | None
     dividend_per_share: float | None
+
+
+@dataclass
+class QuarterProgress:
+    """期中 (1Q〜3Q) 決算の累計実績と、同じ開示での通期会社予想。"""
+
+    period: str  # "1Q" / "2Q" / "3Q"
+    fiscal_year_end: str
+    sales: float | None
+    operating_profit: float | None
+    net_profit: float | None
+    forecast_sales: float | None
+    forecast_operating_profit: float | None
+    forecast_net_profit: float | None
 
 
 @dataclass
@@ -97,8 +120,11 @@ class StockReport:
     prices: list[PriceBar] = field(default_factory=list)
     annual: list[AnnualResult] = field(default_factory=list)
     forecast: Forecast | None = None
+    progress: QuarterProgress | None = None
     indicators: Indicators | None = None
     dividends: list[DividendEvent] = field(default_factory=list)
+    financial: FinancialAnalysis | None = None
+    technical: TechnicalAnalysis | None = None
     notes: list[str] = field(default_factory=list)
     error: str | None = None
 
@@ -167,6 +193,13 @@ def build_annual_results(rows: list[dict[str, Any]]) -> list[AnnualResult]:
                 dividend_per_share=to_float(r.get("DivAnn")),
                 payout_ratio=to_float(r.get("PayoutRatioAnn")),
                 roe=roe,
+                total_assets=_pick(r, "TA"),
+                equity=_pick(r, "Eq"),
+                equity_ratio=_pick(r, "EqAR"),
+                cfo=to_float(r.get("CFO")),
+                cfi=to_float(r.get("CFI")),
+                cff=to_float(r.get("CFF")),
+                cash=to_float(r.get("CashEq")),
             )
         )
     return results
@@ -188,6 +221,28 @@ def build_forecast(rows: list[dict[str, Any]]) -> Forecast | None:
         if any(v is not None for v in (sales, op, np_, eps, div)):
             return Forecast(fy_end, sales, op, np_, eps, div)
     return None
+
+
+def build_progress(rows: list[dict[str, Any]]) -> QuarterProgress | None:
+    """進行期の最新の期中決算 (累計) を取り出す。通期決算がそれより新しければ None。"""
+    latest = max(
+        (r for r in rows if _pick(r, "Sales") is not None or _pick(r, "OP") is not None),
+        key=lambda r: (r.get("DiscDate", ""), r.get("DiscTime", "")),
+        default=None,
+    )
+    if latest is None or latest.get("CurPerType") not in ("1Q", "2Q", "3Q"):
+        return None
+    sales_key, op_key, np_key = _FORECAST_KEYS["current"][:3]
+    return QuarterProgress(
+        period=latest["CurPerType"],
+        fiscal_year_end=latest.get("CurFYEn", ""),
+        sales=_pick(latest, "Sales"),
+        operating_profit=_pick(latest, "OP"),
+        net_profit=_pick(latest, "NP"),
+        forecast_sales=_pick(latest, *sales_key),
+        forecast_operating_profit=_pick(latest, *op_key),
+        forecast_net_profit=_pick(latest, *np_key),
+    )
 
 
 def calc_indicators(
@@ -309,6 +364,7 @@ class Analyzer:
         summary = self.client.fin_summary(code)
         report.annual = build_annual_results(summary)
         report.forecast = build_forecast(summary)
+        report.progress = build_progress(summary)
 
         if self.plan.supports(Feature.VALUATION):
             try:
@@ -323,6 +379,10 @@ class Analyzer:
 
         if self.plan.supports(Feature.DIVIDEND_DETAIL):
             report.dividends = build_dividend_events(self.client.dividends(code))
+
+        # 追加の API 呼び出しなしで、取得済みデータから分析する
+        report.financial = analyze_financials(report.annual, report.forecast, report.progress, report.sector)
+        report.technical = analyze_technicals(report.prices)
 
         if self.plan.delay_weeks:
             report.notes.append(f"{self.plan.label}プランのためデータは約{self.plan.delay_weeks}週間遅れです")

@@ -12,7 +12,7 @@ from .codes import InvalidCodeError, parse_codes
 from .config import load_settings
 from .plans import PLANS
 from .preflight import PreflightError, run_preflight
-from .report import render
+from .report import SECTIONS, render
 
 EXIT_OK = 0
 EXIT_INPUT_ERROR = 1
@@ -25,12 +25,23 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("codes", nargs="?", help='銘柄コード。複数はカンマ区切り (例: "7203,6758")。省略時は対話入力')
     p.add_argument("--plan", choices=list(PLANS), help="J-Quants の契約プラン (既定: 環境変数 JQUANTS_PLAN か free)")
     p.add_argument("--days", type=int, default=365, help="株価を取得する日数 (既定: 365)")
+    p.add_argument(
+        "--sections",
+        default=",".join(SECTIONS),
+        help=f"表示する内容をカンマ区切りで指定 ({'/'.join(SECTIONS)}。既定: すべて)。"
+        " basic=株価・指標・配当・業績, financial=財務分析, technical=テクニカル分析",
+    )
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    sections = tuple(x.strip() for x in args.sections.split(",") if x.strip())
+    unknown = [x for x in sections if x not in SECTIONS]
+    if unknown or not sections:
+        parser.error(f"--sections に不明な値があります: {', '.join(unknown) or '(空)'}")
     settings = load_settings(args.plan)
     try:
         run_preflight(settings)
@@ -62,7 +73,7 @@ def main(argv: list[str] | None = None) -> int:
     for i, code in enumerate(codes):
         report = analyzer.analyze(code)
         failed += report.error is not None
-        print(("\n" if i else "") + render(report), flush=True)
+        print(("\n" if i else "") + render(report, sections), flush=True)
     return EXIT_PARTIAL if failed else EXIT_OK
 
 

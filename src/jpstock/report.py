@@ -159,13 +159,80 @@ def _margin(profit: float | None, sales: float | None) -> float | None:
     return profit / sales
 
 
-def render(r: StockReport) -> str:
+def _signed_pct(v: float | None) -> str:
+    return "-" if v is None else f"{v * 100:+.1f}%"
+
+
+def _financial_section(r: StockReport) -> list[str]:
+    fa = r.financial
+    out = ["■ 財務分析"]
+    if fa is None or not fa.years:
+        return out + ["  通期決算データがないため分析できません"]
+    rows = [
+        [
+            y.fiscal_year_end,
+            pct(y.op_margin),
+            pct(y.net_margin),
+            pct(y.roe),
+            pct(y.roa),
+            pct(y.equity_ratio),
+            oku(y.cfo),
+            oku(y.fcf),
+        ]
+        for y in fa.years
+    ]
+    headers = ["決算期末", "営業利益率", "純利益率", "ROE", "ROA", "自己資本比率", "営業CF(億)", "FCF(億)"]
+    out += ["  " + line for line in table(headers, rows).splitlines()]
+    if fa.cagr_years:
+        items = "  ".join(f"{k} {_signed_pct(v)}" for k, v in fa.cagr.items())
+        out.append(f"  年平均成長率({fa.cagr_years}年): {items}")
+    if fa.progress_standard is not None:
+        items = "  ".join(f"{k} {pct(v)}" for k, v in fa.progress.items())
+        out.append(f"  通期予想に対する進捗({fa.progress_period}, 目安{fa.progress_standard:.0%}): {items}")
+    if fa.assessments:
+        out.append("  評価:")
+        out += [f"    [{a.level}] {a.category}: {a.message}" for a in fa.assessments]
+    return out
+
+
+def _technical_section(r: StockReport) -> list[str]:
+    ta = r.technical
+    out = []
+    if ta is None or ta.close is None:
+        return ["■ テクニカル分析", "  株価データがないため分析できません"]
+    out.append(f"■ テクニカル分析 ({ta.as_of} 時点)  総合: {ta.overall} (スコア {ta.score:+d})")
+    smas = "  ".join(f"{p}日 {num(v, 1)}" for p, v in ta.sma.items())
+    out.append(f"  移動平均: {smas}")
+    s25 = ta.sma.get(25)
+    dev = _signed_pct(ta.close / s25 - 1) if s25 else "-"
+    out.append(f"  25日線乖離率 {dev}  RSI(14) {num(ta.rsi, 1)}  MACD {num(ta.macd, 2)} / シグナル {num(ta.macd_signal, 2)}")
+    out.append(f"  ボリンジャー(20日,±2σ) 上限 {num(ta.bb_upper, 1)} / 下限 {num(ta.bb_lower, 1)}")
+    vr = "-" if ta.volume_ratio is None else f"{ta.volume_ratio:.2f}倍"
+    from_high = _signed_pct(ta.close / ta.high - 1) if ta.high else "-"
+    from_low = _signed_pct(ta.close / ta.low - 1) if ta.low else "-"
+    out.append(f"  出来高(20日平均比) {vr}  期間高値から {from_high}  期間安値から {from_low}")
+    if ta.signals:
+        out.append("  シグナル:")
+        out += [f"    [{s.stance}] {s.name}: {s.detail}" for s in ta.signals]
+    out.append("  ※ 機械的な判定であり、売買を推奨するものではありません")
+    return out
+
+
+SECTIONS = {
+    "basic": (_price_section, _indicator_section, _dividend_section, _performance_section),
+    "financial": (_financial_section,),
+    "technical": (_technical_section,),
+}
+
+
+def render(r: StockReport, sections: tuple[str, ...] = tuple(SECTIONS)) -> str:
     title = f"[{r.code}] {r.name}".rstrip()
     meta = " / ".join(x for x in (r.market, r.sector) if x)
     lines = ["=" * 72, title + (f"  ({meta})" if meta else ""), "=" * 72]
     if r.error:
         return "\n".join(lines + [f"  取得エラー: {r.error}"])
-    for section in (_price_section, _indicator_section, _dividend_section, _performance_section):
-        lines += section(r) + [""]
+    for name in sections:
+        for section in SECTIONS[name]:
+            lines += section(r) + [""]
     lines += [f"※ {n}" for n in r.notes]
     return "\n".join(lines).rstrip()

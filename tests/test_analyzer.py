@@ -53,3 +53,12 @@ def test_valuation_403_falls_back_to_calculation():
     client = FakeClient(get_plan("premium"), valuation_error=True)
     report = Analyzer(client, today=date(2026, 10, 27)).analyze("7203")
     assert report.indicators.source == "calc"
+
+
+def test_report_includes_financial_and_technical_sections():
+    report = Analyzer(FakeClient(get_plan("free")), today=date(2026, 10, 27)).analyze("7203")
+    assert report.financial is not None and report.technical is not None
+    text = render(report)
+    assert "財務分析" in text and "テクニカル分析" in text
+    only_tech = render(report, ("technical",))
+    assert "テクニカル分析" in only_tech and "業績推移" not in only_tech

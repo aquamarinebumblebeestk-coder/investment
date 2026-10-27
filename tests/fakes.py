@@ -15,7 +15,9 @@ def _fy(fy_end, disc, sales, op, np_, eps, bps, div, nxt=None):
     row = {"DiscDate": disc, "DiscTime": "15:00", "Code": "72030", "CurPerType": "FY", "CurFYEn": fy_end,
            "NxtFYEn": nxt or "", "Sales": str(sales), "OP": str(op), "NP": str(np_), "EPS": str(eps),
            "BPS": str(bps), "Eq": str(np_ * 10), "DivAnn": str(div), "PayoutRatioAnn": "0.3",
-           "ShOutFY": "1000", "TrShFY": "0"}
+           "ShOutFY": "1000", "TrShFY": "0",
+           "TA": str(np_ * 25), "EqAR": "0.4", "CFO": str(np_ * 1.2), "CFI": str(-np_ * 0.5),
+           "CFF": str(-np_ * 0.3), "CashEq": str(np_)}
     return row
 
 
