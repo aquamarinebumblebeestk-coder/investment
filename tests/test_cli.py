@@ -18,13 +18,13 @@ def test_cli_rejects_unknown_section(monkeypatch, tmp_path):
         cli.main(["7203", "--sections", "basic,foo"])
 
 
-def test_cli_from_saved_works_without_api(monkeypatch, capsys, tmp_path):
+def test_cli_save_then_from_saved_without_api(monkeypatch, capsys, tmp_path):
     from datetime import date
 
     from fakes import FakeClient
     from jpstock.analyzer import Analyzer
     from jpstock.plans import get_plan
-    from jpstock.snapshot import save_snapshot
+    from jpstock.store import Store
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("CLAUDE_CODE_REMOTE", "true")  # リモート環境でも保存データなら分析できる
@@ -32,12 +32,25 @@ def test_cli_from_saved_works_without_api(monkeypatch, capsys, tmp_path):
     a = analyzer.fetch("7203")
     b = analyzer.fetch("7203")
     b.code = "6758"
-    for s in (a, b):
-        save_snapshot(s, tmp_path / "snaps")
-    assert cli.main(["--from-saved", str(tmp_path / "snaps")]) == cli.EXIT_OK
+    b.master = [dict(b.master[0], Code="67580", CoName="ソニーグループ")]
+    b.bars = [dict(x, Code="67580") for x in b.bars]
+    b.summary = [dict(x, Code="67580", DiscNo=f"s{i}") for i, x in enumerate(b.summary)]
+    with Store(tmp_path / "db.sqlite") as store:
+        store.save_snapshot(a)
+        store.save_snapshot(b)
+    assert cli.main(["7203,6758", "--from-saved", str(tmp_path / "db.sqlite")]) == cli.EXIT_OK
     out = capsys.readouterr().out
-    assert "[6758]" in out and "[7203]" in out and "銘柄比較" in out and "取得日時" in out
+    assert "[6758] ソニーグループ" in out and "[7203] トヨタ自動車" in out and "銘柄比較" in out
+    assert "財務分析" in out and "テクニカル分析" in out
 
 
-def test_cli_from_saved_missing_dir(tmp_path, capsys):
-    assert cli.main(["7203", "--from-saved", str(tmp_path / "none")]) == cli.EXIT_INPUT_ERROR
+def test_cli_from_saved_unknown_code_is_partial(tmp_path, capsys):
+    from jpstock.store import Store
+
+    Store(tmp_path / "db.sqlite").close()
+    assert cli.main(["7203", "--from-saved", str(tmp_path / "db.sqlite")]) == cli.EXIT_PARTIAL
+    assert "保存データがありません" in capsys.readouterr().out
+
+
+def test_cli_from_saved_missing_db(tmp_path):
+    assert cli.main(["7203", "--from-saved", str(tmp_path / "none.db")]) == cli.EXIT_INPUT_ERROR

@@ -38,13 +38,13 @@ jpstock 7203 --days 180      # 株価の取得日数
 jpstock 7203 --sections technical            # テクニカル分析だけ表示
 jpstock "7203,6758" --sections basic,financial
 
-# 取得結果を保存し、後から API なしで分析する
-jpstock "7203,6758,9984" --save              # data/snapshots/ に保存
-jpstock --from-saved                         # 保存済みの全銘柄 (銘柄ごとに最新) を分析
-jpstock 7203 --from-saved --sections summary
+# 取得結果を SQLite (data/jpstock.db) に保存し、後から API なしで分析する
+jpstock "7203,6758,9984" --save
+jpstock "7203,6758" --from-saved
+jpstock 7203 --from-saved --as-of 2026-03-31   # その日までに得られたデータだけで分析
 
 # Claude による分析レポート (別途 pip install -e ".[ai]" と ANTHROPIC_API_KEY が必要)
-jpstock --from-saved --ai --ai-out reports/analysis.md
+jpstock "7203,6758" --from-saved --ai --ai-out reports/analysis.md
 ```
 
 `--sections` に指定できる値 (既定はすべて):
@@ -58,12 +58,42 @@ jpstock --from-saved --ai --ai-out reports/analysis.md
 
 複数銘柄を指定すると、最後に銘柄比較の表が出ます (`--no-compare` で非表示)。
 
-## 取得結果の保存と、保存データからの分析
+## データ基盤 (SQLite)
 
-- `--save [DIR]` で、API から取得した生データを銘柄ごとに JSON で保存します (既定: `data/snapshots/`、ファイル名は `コード_取得日時.json`)。
-- `--from-saved [DIR]` で、J-Quants API に接続せず保存データから分析します。銘柄コード省略時は保存済みの全銘柄、指定時はその銘柄の最新データを使います。
-- 保存データからの分析は API キーもネットワークも不要なので、プリフライトチェック (リモート環境での中断) の対象外です。
-- **注意:** J-Quants の取得データは再配布が認められていません。`data/` は `.gitignore` 済みです。このリポジトリは公開設定のため、保存データをコミットしないでください。
+取得データは SQLite (既定: `data/jpstock.db`) に保存します。
+
+### 全銘柄の取得: `jpstock-data`
+
+```bash
+jpstock-data sync --dry-run     # 必要なリクエスト数と所要時間の見積もりだけ表示
+jpstock-data sync               # プランの提供期間の全銘柄の株価・財務・銘柄一覧・取引カレンダーを取得
+jpstock-data sync --codes 7203,6758       # 指定銘柄だけ (銘柄単位で取得)
+jpstock-data sync --datasets bars --from 2026-06-01 --refresh   # 期間を指定して取り直す
+jpstock-data status             # 件数・期間・取得済み営業日の割合・最終取得日時
+jpstock-data check              # 欠損・異常値・鮮度のチェック
+jpstock-data history            # 取得ログ
+jpstock-data import-snapshots data/snapshots   # 旧形式 (JSON) の保存データを取り込む
+```
+
+- **日付単位で全銘柄を取得**するため、Free プラン (5回/分) でも全銘柄を扱えます。初回は過去2年分で約1,400リクエスト (約4〜5時間) かかります。2回目以降は未取得の日だけを取るので数分です。
+- **中断しても再開できます。** 取得済みの日付を記録しているので、Ctrl+C やエラーで止まっても、再実行すれば続きから取得します。
+- **調整後株価は読み出し時に計算します。** 生の四本値と調整係数を保存しておき、分割・併合があっても過去の値が不整合にならないようにしています。
+- **更新履歴:** 再取得で値が変わった場合は旧値を残します (訂正開示も別レコードとして残ります)。
+- **時点指定:** `--as-of` を付けると、その日までに開示・取引されたデータだけで分析します (第5段階のバックテスト用の土台)。
+
+### 品質チェック (`jpstock-data check`) の内容
+
+| 区分 | 内容 |
+| --- | --- |
+| 欠損 | 未取得の営業日、株価の欠けが多い銘柄、財務情報がない銘柄、終値のない行 |
+| 異常値 | 高値 < 安値、終値・始値が高安の範囲外、0 以下の株価、負の出来高 |
+| 急変 | 調整係数の変化なしで前日比 ±50% 超 (データ誤りの可能性) |
+| 鮮度 | 取得可能な最新日から5営業日以上遅れている、最終取得から7日以上経過 |
+| 取得ログ | 失敗・中断した取得の件数 |
+
+要対応の問題があると終了コード 1 を返します。
+
+**注意:** J-Quants の取得データは再配布が認められていません。`data/` は `.gitignore` 済みです。このリポジトリは公開設定のため、DB ファイルをコミットしないでください。
 
 ## 総合評価の内容
 
@@ -163,7 +193,11 @@ src/jpstock/
   financial.py  財務分析
   technical.py  テクニカル分析
   scoring.py    総合評価
-  snapshot.py   取得結果の保存・読み込み
+  datacli.py    データ基盤のコマンド (jpstock-data)
+  store.py      SQLite への保存・読み出し
+  sync.py       API から DB への同期 (日付単位・再開可能)
+  quality.py    欠損・異常値・鮮度のチェック
+  snapshot.py   1銘柄分のデータの入れ物 (旧 JSON 形式の読み書き)
   ai.py         Claude による分析レポート
   report.py     テキスト表示
 ```

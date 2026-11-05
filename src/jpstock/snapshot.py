@@ -1,8 +1,9 @@
-"""取得結果 (API の生レスポンス) の保存と読み込み。
+"""1銘柄分の取得結果 (API の生レスポンス) と、JSON 形式での保存・読み込み。
 
-PC で取得したデータを JSON に保存しておけば、後から API なしで分析・表示できる。
-J-Quants の利用規約上、取得データの再配布は認められていないため、
-保存先 (既定: data/snapshots) は .gitignore 対象にしている。公開リポジトリにはコミットしないこと。
+Snapshot は API・DB から分析 (analyzer.build_report) へデータを渡す入れ物。
+保存の本体は SQLite (store.py) に移行済みで、JSON は旧形式の取り込み
+(jpstock-data import-snapshots) とテスト用に残している。
+J-Quants の取得データは再配布不可のため、公開リポジトリにはコミットしないこと。
 """
 
 from __future__ import annotations
@@ -50,14 +51,3 @@ def load_snapshot(path: Path) -> Snapshot:
     if version != FORMAT_VERSION:
         raise ValueError(f"{path}: 対応していない保存形式です (format_version={version})")
     return Snapshot(**data)
-
-
-def latest_snapshots(directory: Path, codes: list[str] | None = None) -> dict[str, Path]:
-    """銘柄ごとに最新の保存ファイルを返す。codes 指定時はその順序で、見つからない銘柄は含まない。"""
-    latest: dict[str, Path] = {}
-    for path in sorted(directory.glob("*_*.json")):  # ファイル名の日時順 = 取得順
-        code = path.name.split("_", 1)[0]
-        latest[code] = path
-    if codes is None:
-        return dict(sorted(latest.items()))
-    return {c: latest[c] for c in codes if c in latest}

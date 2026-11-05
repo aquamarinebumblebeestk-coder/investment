@@ -14,7 +14,7 @@ from .config import load_settings
 from .plans import PLANS
 from .preflight import PreflightError, run_preflight
 from .report import SECTIONS, render, render_comparison
-from .snapshot import DEFAULT_DIR, latest_snapshots, load_snapshot, save_snapshot
+from .store import DEFAULT_DB, Store
 
 EXIT_OK = 0
 EXIT_INPUT_ERROR = 1
@@ -27,7 +27,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "codes",
         nargs="?",
-        help='銘柄コード。複数はカンマ区切り (例: "7203,6758")。省略時は対話入力 (--from-saved では保存済み全銘柄)',
+        help='銘柄コード。複数はカンマ区切り (例: "7203,6758")。省略時は対話入力',
     )
     p.add_argument("--plan", choices=list(PLANS), help="J-Quants の契約プラン (既定: 環境変数 JQUANTS_PLAN か free)")
     p.add_argument("--days", type=int, default=365, help="株価を取得する日数 (既定: 365)")
@@ -40,19 +40,20 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--save",
         nargs="?",
-        const=DEFAULT_DIR,
+        const=DEFAULT_DB,
         type=Path,
-        metavar="DIR",
-        help=f"取得結果を JSON で保存する (既定の保存先: {DEFAULT_DIR})",
+        metavar="DB",
+        help=f"取得結果を SQLite に保存する (既定: {DEFAULT_DB})",
     )
     p.add_argument(
         "--from-saved",
         nargs="?",
-        const=DEFAULT_DIR,
+        const=DEFAULT_DB,
         type=Path,
-        metavar="DIR",
-        help=f"API を使わず保存済みの取得結果 (銘柄ごとに最新) から分析する (既定: {DEFAULT_DIR})",
+        metavar="DB",
+        help=f"API を使わず SQLite の保存データから分析する (既定: {DEFAULT_DB})。jpstock-data sync で全銘柄を保存できる",
     )
+    p.add_argument("--as-of", metavar="YYYY-MM-DD", help="--from-saved で、その日までに得られたデータだけで分析する")
     p.add_argument("--no-compare", action="store_true", help="複数銘柄のときの比較表を表示しない")
     p.add_argument("--ai", action="store_true", help="Claude による分析レポートを生成する (要: anthropic パッケージと API キー)")
     p.add_argument("--ai-model", help="--ai で使う Claude のモデル (既定: 環境変数 JPSTOCK_AI_MODEL か claude-opus-5-5)")
@@ -69,23 +70,19 @@ def _parse_sections(parser: argparse.ArgumentParser, text: str) -> tuple[str, ..
     return sections
 
 
-def _reports_from_saved(directory: Path, codes: list[str] | None) -> list[StockReport] | None:
-    if not directory.is_dir():
-        print(f"保存先が見つかりません: {directory}", file=sys.stderr)
-        return None
-    paths = latest_snapshots(directory, codes)
-    missing = [c for c in codes or [] if c not in paths]
-    if missing:
-        print(f"保存データがない銘柄: {', '.join(missing)}", file=sys.stderr)
-    if not paths:
-        print(f"{directory} に保存データがありません。先に --save 付きで取得してください", file=sys.stderr)
+def _reports_from_saved(db: Path, codes: list[str], plan: str, days: int, as_of: str | None) -> list[StockReport] | None:
+    if not db.is_file():
+        print(f"保存データ (DB) が見つかりません: {db}。--save 付きで取得するか jpstock-data sync を実行してください", file=sys.stderr)
         return None
     reports = []
-    for code, path in paths.items():
-        try:
-            reports.append(build_report(load_snapshot(path)))
-        except (OSError, ValueError, TypeError) as e:
-            reports.append(StockReport(code=code, error=f"保存データを読めません ({path}): {e}"))
+    with Store(db) as store:
+        for code in codes:
+            snap = store.snapshot(code, plan, as_of=as_of)
+            snap.bars = snap.bars[-days:] if days else snap.bars  # 営業日ベースで直近分に絞る
+            if not snap.bars and not snap.summary:
+                reports.append(StockReport(code=code, error="保存データがありません"))
+                continue
+            reports.append(build_report(snap))
     return reports
 
 
@@ -122,8 +119,9 @@ def _reports_from_api(args: argparse.Namespace) -> tuple[list[StockReport] | Non
     for code in codes:
         report, snap = analyzer.analyze(code)
         if snap is not None and args.save is not None:
-            path = save_snapshot(snap, args.save)
-            print(f"(取得結果を保存しました: {path})", file=sys.stderr)
+            with Store(args.save) as store:
+                store.save_snapshot(snap)
+            print(f"(取得結果を保存しました: {args.save})", file=sys.stderr)
         reports.append(report)
     return reports, EXIT_OK
 
@@ -134,12 +132,15 @@ def main(argv: list[str] | None = None) -> int:
     sections = _parse_sections(parser, args.sections)
 
     if args.from_saved is not None:
+        text = args.codes if args.codes is not None else input("銘柄コード (カンマ区切り): ")
         try:
-            codes = parse_codes(args.codes) if args.codes else None
+            codes = parse_codes(text)
         except InvalidCodeError as e:
             print(f"入力エラー: {e}", file=sys.stderr)
             return EXIT_INPUT_ERROR
-        reports = _reports_from_saved(args.from_saved, codes)
+        plan = load_settings(args.plan).plan.name
+        # 株価は営業日で約 days*245/365 本 (暦日→営業日の換算)
+        reports = _reports_from_saved(args.from_saved, codes, plan, args.days * 245 // 365, args.as_of)
         if reports is None:
             return EXIT_INPUT_ERROR
     else:

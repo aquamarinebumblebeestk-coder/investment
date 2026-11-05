@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date, timedelta
 from enum import Enum
 
 
@@ -36,6 +37,12 @@ class Plan:
 
     def supports(self, feature: Feature) -> bool:
         return feature in self.features
+
+    def data_window(self, today: date) -> tuple[date, date]:
+        """このプランで取得できる期間 (提供期間の最初の日, 遅延を考慮した最新日)。"""
+        end = today - timedelta(weeks=self.delay_weeks)
+        start = today - timedelta(days=365 * (self.history_years or 20)) + timedelta(days=1)
+        return start, end
 
 
 PLANS: dict[str, Plan] = {

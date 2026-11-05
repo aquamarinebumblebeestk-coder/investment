@@ -223,12 +223,14 @@ def analyze_technicals(prices: list[PriceBar]) -> TechnicalAnalysis:
             stance = BULLISH if kind == "golden" else BEARISH
             word = "上抜け" if kind == "golden" else "下抜け"
             sig.append(Signal("MACD", stance, f"MACDがシグナルを{word} ({when})"))
+        elif ta.macd == ta.macd_signal:
+            sig.append(Signal("MACD", NEUTRAL, "MACD = シグナル"))
         else:
             stance = BULLISH if ta.macd > ta.macd_signal else BEARISH
             sig.append(Signal("MACD", stance, f"MACD {'>' if stance == BULLISH else '<'} シグナル"))
 
     # ボリンジャーバンド
-    if ta.bb_upper is not None and ta.bb_lower is not None:
+    if ta.bb_upper is not None and ta.bb_lower is not None and ta.bb_upper > ta.bb_lower:  # 値動きなしは判定しない
         if close >= ta.bb_upper:
             sig.append(Signal("ボリンジャー", BEARISH, f"+{BB_SIGMA:.0f}σ 以上 (過熱気味)"))
         elif close <= ta.bb_lower:

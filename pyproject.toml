@@ -15,6 +15,7 @@ ai = ["anthropic>=2.6"]
 
 [project.scripts]
 jpstock = "jpstock.cli:main"
+jpstock-data = "jpstock.datacli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

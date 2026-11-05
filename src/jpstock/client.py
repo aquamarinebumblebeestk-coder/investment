@@ -128,6 +128,23 @@ class JQuantsClient:
         """バリュエーション指標 /equities/valuation"""
         return self._get_all("/equities/valuation", {"code": code, "from": _fmt(date_from), "to": _fmt(date_to)})
 
+    # ---- 日付単位 (全銘柄) の取得: 銘柄ごとより大幅に呼び出し回数が少ない ----
+    def bars_on(self, d: date | str) -> list[dict[str, Any]]:
+        """指定日の全銘柄の株価四本値"""
+        return self._get_all("/equities/bars/daily", {"date": _fmt(d)})
+
+    def fin_summary_on(self, d: date | str) -> list[dict[str, Any]]:
+        """指定日に開示された全銘柄の財務情報サマリ"""
+        return self._get_all("/fins/summary", {"date": _fmt(d)})
+
+    def master_on(self, d: date | str | None = None) -> list[dict[str, Any]]:
+        """全上場銘柄一覧 (日付省略時は最新)"""
+        return self._get_all("/equities/master", {"date": _fmt(d) if d else None})
+
+    def calendar(self, date_from: date | str, date_to: date | str) -> list[dict[str, Any]]:
+        """取引カレンダー /markets/calendar"""
+        return self._get_all("/markets/calendar", {"from": _fmt(date_from), "to": _fmt(date_to)})
+
     def dividends(self, code: str) -> list[dict[str, Any]]:
         """配当金情報 /fins/dividend (Premium)"""
         return self._get_all("/fins/dividend", {"code": code})

@@ -86,3 +86,9 @@ def test_short_history_does_not_crash():
     ta = analyze_technicals(_bars([100, 101, 102]))
     assert ta.rsi is None and ta.sma[75] is None
     assert analyze_technicals([]).close is None
+
+
+def test_flat_prices_are_neutral():
+    ta = analyze_technicals(_bars([100.0] * 120))
+    assert ta.overall == "中立" and ta.score == 0
+    assert not any(s.name == "ボリンジャー" for s in ta.signals)
