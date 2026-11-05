@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from .client import JQuantsClient, JQuantsError, PlanNotSupportedError
 from .financial import FinancialAnalysis, analyze_financials
-from .plans import Feature
+from .plans import Feature, get_plan
+from .scoring import ScoreCard, score_report
+from .snapshot import Snapshot
 from .technical import TechnicalAnalysis, analyze_technicals
 
 
@@ -114,6 +116,7 @@ class DividendEvent:
 @dataclass
 class StockReport:
     code: str
+    fetched_at: str = ""
     name: str = ""
     market: str = ""
     sector: str = ""
@@ -125,6 +128,7 @@ class StockReport:
     dividends: list[DividendEvent] = field(default_factory=list)
     financial: FinancialAnalysis | None = None
     technical: TechnicalAnalysis | None = None
+    score: ScoreCard | None = None
     notes: list[str] = field(default_factory=list)
     error: str | None = None
 
@@ -322,8 +326,46 @@ def _shares_outstanding(rows: list[dict[str, Any]]) -> float | None:
 
 
 # ---------------------------------------------------------------------------
-# 取得 + 集計
+# 取得 (API → Snapshot) と 集計 (Snapshot → StockReport)
 # ---------------------------------------------------------------------------
+def build_report(snap: Snapshot) -> StockReport:
+    """保存済み/取得直後の生データからレポートを組み立てる (API は呼ばない)。"""
+    plan = get_plan(snap.plan)
+    report = StockReport(code=snap.code, fetched_at=snap.fetched_at, notes=list(snap.notes))
+    if not snap.master:
+        report.error = "銘柄が見つかりません (上場廃止・コード誤り・プランの提供期間外の可能性)"
+        return report
+    m = snap.master[-1]
+    report.name = m.get("CoName", "")
+    report.market = m.get("MktNm", "")
+    report.sector = m.get("S33Nm", "")
+
+    report.prices = build_prices(snap.bars)
+    report.annual = build_annual_results(snap.summary)
+    report.forecast = build_forecast(snap.summary)
+    report.progress = build_progress(snap.summary)
+
+    if snap.valuation:
+        div = report.forecast.dividend_per_share if report.forecast else None
+        report.indicators = indicators_from_valuation(snap.valuation, div)
+    if report.indicators is None:
+        report.indicators = calc_indicators(
+            report.prices, report.annual, report.forecast, _shares_outstanding(snap.summary)
+        )
+    if snap.dividends:
+        report.dividends = build_dividend_events(snap.dividends)
+
+    report.financial = analyze_financials(report.annual, report.forecast, report.progress, report.sector)
+    report.technical = analyze_technicals(report.prices)
+    report.score = score_report(report)
+
+    if plan.delay_weeks:
+        report.notes.append(f"{plan.label}プランのためデータは約{plan.delay_weeks}週間遅れです")
+    if plan.history_years is not None:
+        report.notes.append(f"{plan.label}プランの提供期間は過去{plan.history_years}年分です")
+    return report
+
+
 class Analyzer:
     def __init__(self, client: JQuantsClient, *, price_days: int = 365, today: date | None = None):
         self.client = client
@@ -339,52 +381,34 @@ class Analyzer:
             start = max(start, self.today - timedelta(days=365 * self.plan.history_years))
         return start, end
 
-    def analyze(self, code: str) -> StockReport:
-        report = StockReport(code=code)
-        try:
-            self._fill(report)
-        except JQuantsError as e:
-            report.error = str(e)
-        return report
-
-    def _fill(self, report: StockReport) -> None:
-        code = report.code
-        master = self.client.equities_master(code)
-        if not master:
-            report.error = "銘柄が見つかりません (上場廃止・コード誤り・プランの提供期間外の可能性)"
-            return
-        m = master[-1]
-        report.name = m.get("CoName", "")
-        report.market = m.get("MktNm", "")
-        report.sector = m.get("S33Nm", "")
-
+    def fetch(self, code: str) -> Snapshot:
+        """API から銘柄のデータを取得する。プランで使えない機能は呼ばない。"""
         start, end = self.price_range()
-        report.prices = build_prices(self.client.daily_bars(code, start, end))
-
-        summary = self.client.fin_summary(code)
-        report.annual = build_annual_results(summary)
-        report.forecast = build_forecast(summary)
-        report.progress = build_progress(summary)
-
+        snap = Snapshot(
+            code=code,
+            fetched_at=datetime.now().isoformat(timespec="seconds"),
+            plan=self.plan.name,
+            price_from=start.isoformat(),
+            price_to=end.isoformat(),
+        )
+        snap.master = self.client.equities_master(code)
+        if not snap.master:
+            return snap
+        snap.bars = self.client.daily_bars(code, start, end)
+        snap.summary = self.client.fin_summary(code)
         if self.plan.supports(Feature.VALUATION):
             try:
-                div = report.forecast.dividend_per_share if report.forecast else None
-                report.indicators = indicators_from_valuation(self.client.valuation(code, start, end), div)
+                snap.valuation = self.client.valuation(code, start, end)
             except PlanNotSupportedError:
-                report.notes.append("バリュエーションAPIが使えないため指標は自前計算しています")
-        if report.indicators is None:
-            report.indicators = calc_indicators(
-                report.prices, report.annual, report.forecast, _shares_outstanding(summary)
-            )
-
+                snap.notes.append("バリュエーションAPIが使えないため指標は自前計算しています")
         if self.plan.supports(Feature.DIVIDEND_DETAIL):
-            report.dividends = build_dividend_events(self.client.dividends(code))
+            snap.dividends = self.client.dividends(code)
+        return snap
 
-        # 追加の API 呼び出しなしで、取得済みデータから分析する
-        report.financial = analyze_financials(report.annual, report.forecast, report.progress, report.sector)
-        report.technical = analyze_technicals(report.prices)
-
-        if self.plan.delay_weeks:
-            report.notes.append(f"{self.plan.label}プランのためデータは約{self.plan.delay_weeks}週間遅れです")
-        if self.plan.history_years is not None:
-            report.notes.append(f"{self.plan.label}プランの提供期間は過去{self.plan.history_years}年分です")
+    def analyze(self, code: str) -> tuple[StockReport, Snapshot | None]:
+        """取得してレポートを作る。取得に失敗した場合はエラー入りのレポートと None を返す。"""
+        try:
+            snap = self.fetch(code)
+        except JQuantsError as e:
+            return StockReport(code=code, error=str(e)), None
+        return build_report(snap), snap

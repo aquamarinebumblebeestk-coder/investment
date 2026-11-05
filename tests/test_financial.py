@@ -1,6 +1,6 @@
 import pytest
 
-from jpstock.analyzer import AnnualResult, Forecast, QuarterProgress, build_annual_results, build_progress
+from jpstock.analyzer import AnnualResult, Forecast, build_annual_results, build_progress
 from jpstock.financial import CAUTION, GOOD, analyze_financials, as_ratio, cagr
 
 from fakes import SUMMARY

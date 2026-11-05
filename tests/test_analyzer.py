@@ -24,7 +24,7 @@ def test_forecast_uses_next_fy_after_annual_report():
 
 def test_free_plan_calculates_indicators_and_respects_delay():
     client = FakeClient(get_plan("free"))
-    report = Analyzer(client, today=date(2026, 10, 27)).analyze("7203")
+    report = Analyzer(client, today=date(2026, 10, 27)).analyze("7203")[0]
     assert report.error is None
     assert "valuation" not in client.calls and "dividends" not in client.calls
     _, start, end = client.calls[1]
@@ -42,7 +42,7 @@ def test_free_plan_calculates_indicators_and_respects_delay():
 
 def test_premium_plan_uses_valuation_and_dividend_detail():
     client = FakeClient(get_plan("premium"))
-    report = Analyzer(client, today=date(2026, 10, 27)).analyze("7203")
+    report = Analyzer(client, today=date(2026, 10, 27)).analyze("7203")[0]
     assert report.indicators.source == "api"
     assert report.indicators.per == 13
     assert len(report.dividends) == 1
@@ -51,12 +51,12 @@ def test_premium_plan_uses_valuation_and_dividend_detail():
 
 def test_valuation_403_falls_back_to_calculation():
     client = FakeClient(get_plan("premium"), valuation_error=True)
-    report = Analyzer(client, today=date(2026, 10, 27)).analyze("7203")
+    report = Analyzer(client, today=date(2026, 10, 27)).analyze("7203")[0]
     assert report.indicators.source == "calc"
 
 
 def test_report_includes_financial_and_technical_sections():
-    report = Analyzer(FakeClient(get_plan("free")), today=date(2026, 10, 27)).analyze("7203")
+    report = Analyzer(FakeClient(get_plan("free")), today=date(2026, 10, 27)).analyze("7203")[0]
     assert report.financial is not None and report.technical is not None
     text = render(report)
     assert "財務分析" in text and "テクニカル分析" in text

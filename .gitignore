@@ -6,3 +6,5 @@ __pycache__/
 .pytest_cache/
 build/
 dist/
+# J-Quants の取得データ (再配布不可のためコミットしない)
+data/

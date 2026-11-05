@@ -218,17 +218,34 @@ def _technical_section(r: StockReport) -> list[str]:
     return out
 
 
+def _summary_section(r: StockReport) -> list[str]:
+    sc = r.score
+    if sc is None or sc.total is None:
+        return ["■ 総合評価", "  評価に必要なデータが不足しています"]
+    out = [f"■ 総合評価  {sc.total_100}点 / 100 (5段階平均 {sc.total:.1f})", f"  総評: {sc.summary()}"]
+    for c in sc.categories:
+        stars = "-----" if c.score is None else ("★" * round(c.score)).ljust(5, "☆")
+        score = "  - " if c.score is None else f"{c.score:.1f}"
+        out.append(f"  {_pad(c.name, 10, False)} {stars} {score}  {' / '.join(c.details)}")
+    out.append("  ※ 一般的な目安による機械的な採点で、業種特性は考慮していません")
+    return out
+
+
 SECTIONS = {
     "basic": (_price_section, _indicator_section, _dividend_section, _performance_section),
     "financial": (_financial_section,),
     "technical": (_technical_section,),
+    "summary": (_summary_section,),
 }
 
 
 def render(r: StockReport, sections: tuple[str, ...] = tuple(SECTIONS)) -> str:
     title = f"[{r.code}] {r.name}".rstrip()
     meta = " / ".join(x for x in (r.market, r.sector) if x)
-    lines = ["=" * 72, title + (f"  ({meta})" if meta else ""), "=" * 72]
+    lines = ["=" * 72, title + (f"  ({meta})" if meta else "")]
+    if r.fetched_at:
+        lines.append(f"取得日時: {r.fetched_at}")
+    lines.append("=" * 72)
     if r.error:
         return "\n".join(lines + [f"  取得エラー: {r.error}"])
     for name in sections:
@@ -236,3 +253,62 @@ def render(r: StockReport, sections: tuple[str, ...] = tuple(SECTIONS)) -> str:
             lines += section(r) + [""]
     lines += [f"※ {n}" for n in r.notes]
     return "\n".join(lines).rstrip()
+
+
+def _short(s: str, width: int) -> str:
+    out = ""
+    for c in s:
+        if _width(out + c) > width:
+            return out[:-1] + "…" if out else ""
+        out += c
+    return out
+
+
+def render_comparison(reports: list[StockReport]) -> str:
+    """複数銘柄の比較表 (総合評価の高い順)。"""
+    ok = [r for r in reports if r.error is None]
+    if len(ok) < 2:
+        return ""
+
+    def total(r: StockReport) -> float:
+        return r.score.total if r.score and r.score.total is not None else -1
+
+    rows = []
+    for rank, r in enumerate(sorted(ok, key=total, reverse=True), 1):
+        i, ta, sc = r.indicators, r.technical, r.score
+        y = r.financial.years[-1] if r.financial and r.financial.years else None
+        cagr = r.financial.cagr.get("売上高") if r.financial else None
+
+        def cat(name: str) -> str:
+            c = sc.get(name) if sc else None
+            return "-" if c is None or c.score is None else f"{c.score:.1f}"
+
+        rows.append(
+            [
+                str(rank),
+                r.code,
+                _short(r.name, 14),
+                num(i.close if i else None, 1),
+                times(i.per if i else None),
+                times(i.pbr if i else None),
+                pct(i.dividend_yield if i else None),
+                pct(i.roe if i else None),
+                pct(y.op_margin if y else None),
+                _signed_pct(cagr),
+                pct(y.equity_ratio if y else None),
+                ta.overall if ta and ta.close is not None else "-",
+                cat("割安性"),
+                cat("収益性"),
+                cat("成長性"),
+                cat("安全性"),
+                "-" if not sc or sc.total_100 is None else str(sc.total_100),
+            ]
+        )
+    headers = [
+        "順位", "コード", "銘柄名", "終値", "PER", "PBR", "利回り", "ROE", "営業利益率", "売上CAGR",
+        "自己資本比率", "テクニカル", "割安", "収益", "成長", "安全", "総合",
+    ]
+    lines = ["=" * 72, f"銘柄比較 ({len(ok)}銘柄, 総合評価順)", "=" * 72]
+    lines += table(headers, rows).splitlines()
+    lines.append("※ 割安〜安全は5段階評価、総合は100点満点。機械的な採点であり投資判断は自己責任で行ってください")
+    return "\n".join(lines)

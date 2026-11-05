@@ -11,6 +11,7 @@ dependencies = ["requests>=2.31"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+ai = ["anthropic>=2.6"]
 
 [project.scripts]
 jpstock = "jpstock.cli:main"
