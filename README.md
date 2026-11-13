@@ -95,6 +95,33 @@ jpstock-data import-snapshots data/snapshots   # 旧形式 (JSON) の保存デ�
 
 **注意:** J-Quants の取得データは再配布が認められていません。`data/` は `.gitignore` 済みです。このリポジトリは公開設定のため、DB ファイルをコミットしないでください。
 
+## 全銘柄スクリーニング (`jpstock-screen`)
+
+`jpstock-data sync` で保存した全銘柄のデータから、条件に合う銘柄を抽出して並べ替えます。API は使いません。
+
+```bash
+jpstock-screen                                  # 総合評価の高い順に上位50銘柄
+jpstock-screen --preset value                   # 割安株の条件セット
+jpstock-screen "per<=12" "roe>=10%" "yield>=3%" --market プライム
+jpstock-screen --preset growth --sort sales_cagr --limit 20
+jpstock-screen --preset quality --csv data/out/quality.csv   # 結果を CSV に (Excel で開ける)
+jpstock-screen --as-of 2026-03-31               # その日までのデータでスクリーニング
+jpstock-screen --list-metrics                   # 使える指標とプリセットの一覧
+```
+
+- **条件の書き方:** `指標 演算子 値` (演算子は `< <= > >= = !=`)。複数指定は AND です。`%`・`万`・`億`・`兆` の単位が使え、全角でも入力できます。
+- **既定の除外:** 業種「その他」(ETF・REIT 等) と、売買代金 (20日平均) が5,000万円未満の銘柄は除外します。`--include-others`、`--min-turnover 0` で解除できます。
+- **データがない場合:** 条件に使った指標の値がない銘柄 (赤字で PER がない等) は、条件を満たさない扱いです。
+- **所要時間:** 約4,000銘柄で20秒前後です (DB は2年分で約200MB)。
+
+| プリセット | 条件 |
+| --- | --- |
+| `value` 割安株 | PER 0超15以下、PBR 1.2以下、配当利回り 2.5%以上 |
+| `growth` 成長株 | 売上CAGR 10%以上、予想営業増益率 5%以上、営業利益率 5%以上 |
+| `quality` 高収益・財務健全 | ROE 10%以上、営業利益率 10%以上、自己資本比率 40%以上、FCF プラス |
+| `dividend` 高配当 | 配当利回り 3.5%以上、PER 0超、自己資本比率 30%以上 |
+| `momentum` 上昇トレンド | テクニカルスコア +2以上、3か月騰落率 0%以上 |
+
 ## 総合評価の内容
 
 各カテゴリを複数の指標で 1〜5 点に採点し、その平均をカテゴリ点とします。総合点はカテゴリ平均を 100 点満点に換算したものです。4 点以上のカテゴリを「強み」、2 点以下を「課題」として総評に出します。閾値は `src/jpstock/scoring.py` で調整できます。
@@ -194,6 +221,8 @@ src/jpstock/
   technical.py  テクニカル分析
   scoring.py    総合評価
   datacli.py    データ基盤のコマンド (jpstock-data)
+  screening.py  全銘柄スクリーニング
+  screencli.py  スクリーニングのコマンド (jpstock-screen)
   store.py      SQLite への保存・読み出し
   sync.py       API から DB への同期 (日付単位・再開可能)
   quality.py    欠損・異常値・鮮度のチェック

@@ -301,11 +301,28 @@ class Store:
         return [json.loads(r["raw"]) for r in rows]
 
     def listing(self, code: str, as_of: str | None = None) -> list[dict[str, Any]]:
+        """as_of 時点の銘柄情報。それ以前の一覧がなければ最も古い一覧の情報を使う (universe と同じ扱い)。"""
         row = self.conn.execute(
-            "SELECT raw FROM listings WHERE code=? AND (? IS NULL OR date <= ?) ORDER BY date DESC LIMIT 1",
-            (api_code(code), as_of, as_of),
+            "SELECT raw FROM listings WHERE code=? ORDER BY (? IS NULL OR date <= ?) DESC,"
+            " CASE WHEN ? IS NULL OR date <= ? THEN date END DESC, date ASC LIMIT 1",
+            (api_code(code), as_of, as_of, as_of, as_of),
         ).fetchone()
         return [json.loads(row["raw"])] if row else []
+
+    def universe(self, as_of: str | None = None) -> tuple[str | None, list[dict[str, Any]]]:
+        """as_of 時点 (省略時は最新) の上場銘柄一覧と、その一覧の日付。
+
+        as_of より前の一覧がない場合は最も古い一覧を使う (その後に上場廃止した銘柄が漏れる点に注意)。
+        """
+        row = self.conn.execute(
+            "SELECT COALESCE((SELECT MAX(date) FROM listings WHERE ? IS NULL OR date <= ?),"
+            " (SELECT MIN(date) FROM listings)) AS d",
+            (as_of, as_of),
+        ).fetchone()
+        if row["d"] is None:
+            return None, []
+        rows = self.conn.execute("SELECT raw FROM listings WHERE date=? ORDER BY code", (row["d"],)).fetchall()
+        return row["d"], [json.loads(r["raw"]) for r in rows]
 
     def last_fetched_at(self, code: str) -> str | None:
         row = self.conn.execute(

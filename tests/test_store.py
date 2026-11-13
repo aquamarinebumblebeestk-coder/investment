@@ -57,6 +57,7 @@ def test_fins_and_listing_as_of(store):
     assert [f["DiscNo"] for f in store.fins("7203", as_of="2025-12-31")] == ["a"]
     assert store.listing("7203", as_of="2025-06-01")[0]["CoName"] == "旧社名"
     assert store.listing("7203")[0]["CoName"] == "新社名"
+    assert store.listing("7203", as_of="2024-01-01")[0]["CoName"] == "旧社名"  # それ以前の一覧がなければ最古
 
 
 def test_logged_fetch_records_success_and_error(store):
